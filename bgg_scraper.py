@@ -9,6 +9,8 @@ import time
 import os
 import sys
 import random
+import re
+import socket
 
 # ---------------------------------------------------------------------------
 # CONFIGURAÇÕES — edite aqui
@@ -25,6 +27,14 @@ DETAIL_MAX_DELAY    = 4.5    # Tempo máximo entre requisições de detalhe (/cr
 BASE_URL    = "https://boardgamegeek.com/browse/boardgame"
 BGG_ROOT    = "https://boardgamegeek.com"
 
+def check_internet_connection(host="8.8.8.8", port=53, timeout=3) -> bool:
+    """Verifica se há conexão com a internet tentando conectar ao DNS do Google."""
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except socket.error:
+        return False
 
 def build_driver() -> webdriver.Chrome:
     """Cria o Chrome com configurações mínimas para estabilidade."""
@@ -55,6 +65,7 @@ def get_credits_details(driver: webdriver.Chrome, game_path: str) -> dict:
     Acessa a página /credits de um jogo e extrai:
 
     Painel gameplay (ul.gameplay):
+      - relationship  (ex: "Expansion for:")
       - num_players   (ex: "2–4")
       - play_time     (ex: "60–120")
       - suggested_age (ex: "14+")
@@ -81,6 +92,7 @@ def get_credits_details(driver: webdriver.Chrome, game_path: str) -> dict:
         "developer":     "",
         "categories":    "",
         "mechanisms":    "",
+        "relationship":  "",
     }
 
     # Mapeamento: id do span → chave no dict de saída
@@ -97,16 +109,46 @@ def get_credits_details(driver: webdriver.Chrome, game_path: str) -> dict:
     try:
         driver.get(url)
 
-        # Aguarda os dois blocos principais renderizarem
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "ul.gameplay"))
         )
-        # A seção credits pode demorar um pouco mais — aguarda o primeiro li da outline
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "ul.outline li.outline-item"))
         )
 
         soup = BeautifulSoup(driver.page_source, "lxml")
+
+               # ------------------------------------------------------------------ #
+        # BLOCO 0 — Relationship (Reimplements / Expansion for / etc.)
+        #
+        # Os divs game-header-subtype ficam dentro de div.game-header-classifications.
+        # Cada div contém um texto-label (ex: "Reimplements:") e links <a class="ng-binding">
+        # com os jogos relacionados. Se a div não existir, o jogo é original → campo vazio.
+        # ------------------------------------------------------------------ #
+        relationship_parts = []
+        classifications = soup.select_one("div.game-header-classifications")
+        if classifications:
+            for subtype_div in classifications.select("div.game-header-subtype"):
+                raw_text = subtype_div.get_text(separator=" ", strip=True)
+
+                # Extrai o label: primeiro grupo de palavras seguido de ":"
+                # Ex: "Reimplements:", "Expansion for:", "Reimplemented by:"
+                label_match = re.search(r'^([A-Za-z ]+:)', raw_text)
+                label = label_match.group(1).strip() if label_match else ""
+
+                # Extrai os nomes dos jogos relacionados via links
+                links = [a.get_text(strip=True) for a in subtype_div.select("a.ng-binding")]
+
+                if label and links:
+                    relationship_parts.append(f"{label} {' / '.join(links)}")
+                elif label:
+                    # Label presente mas sem links (raro) — registra o texto bruto
+                    relationship_parts.append(raw_text)
+
+        # Múltiplos relacionamentos separados por " | "
+        # Ex: "Reimplements: Jogo A / Jogo B | Expansion for: Jogo C"
+        details["relationship"] = " | ".join(relationship_parts)
+
 
         # ------------------------------------------------------------------ #
         # BLOCO 1 — Gameplay panel (players / time / age / complexity)
@@ -241,6 +283,7 @@ def parse_page(html: str) -> list[dict]:
         game["developer"]     = ""
         game["categories"]    = ""
         game["mechanisms"]    = ""
+        game["relationship"]  = ""
 
         games.append(game)
 
@@ -254,7 +297,7 @@ def append_to_csv(games: list[dict], path: str) -> None:
         "geek_rating", "avg_rating", "num_voters", "price",
         "num_players", "play_time", "suggested_age", "complexity",
         "designers", "artists", "publishers", "developer",
-        "categories", "mechanisms",
+        "categories", "mechanisms", "relationship"
     ]
     file_exists = os.path.isfile(path)
     with open(path, "a", newline="", encoding="utf-8") as f:
@@ -276,6 +319,10 @@ if __name__ == "__main__":
 
     try:
         for page in range(START_PAGE, END_PAGE + 1):
+            if not check_internet_connection():
+                print("\n[ERRO CRÍTICO] Conexão com a internet perdida. Interrompendo o script.", file=sys.stderr)
+                sys.exit(1)
+            
             print(f"  Coletando página {page}/{END_PAGE}…")
             html = get_page_html(driver, page)
 
@@ -291,6 +338,10 @@ if __name__ == "__main__":
                 # Enriquece cada jogo com os detalhes da página /credits
                 for i, game in enumerate(games, start=1):
                     if game["game_path"]:
+                        if not check_internet_connection():
+                            print("\n[ERRO CRÍTICO] Conexão com a internet perdida durante a extração de detalhes. Interrompendo o script.", file=sys.stderr)
+                            sys.exit(1)
+                            
                         print(f"    [{i}/{len(games)}] Detalhes: {game['title']}…")
                         details = get_credits_details(driver, game["game_path"])
                         game.update(details)
