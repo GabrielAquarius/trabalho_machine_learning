@@ -12,11 +12,14 @@ import random
 import re
 import socket
 
+# lu_gl_ml
+# nuXH.v6229BcLm7
+
 # ---------------------------------------------------------------------------
 # CONFIGURAÇÕES — edite aqui
 # ---------------------------------------------------------------------------
-START_PAGE          = 1
-END_PAGE            = 2
+START_PAGE          = 82
+END_PAGE            = 83
 OUTPUT_CSV          = "bgg_ranking.csv"
 MIN_DELAY           = 4.0    # Tempo mínimo de espera entre páginas de listagem
 MAX_DELAY           = 7.5    # Tempo máximo de espera entre páginas de listagem
