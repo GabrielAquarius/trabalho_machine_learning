@@ -8,3 +8,4 @@ openpyxl
 matplotlib
 seaborn
 statsmodels
+shap
