@@ -7,3 +7,5 @@ scikit-learn
 openpyxl
 matplotlib
 seaborn
+shap
+scipy
